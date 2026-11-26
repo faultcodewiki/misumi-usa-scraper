@@ -1,55 +1,73 @@
 {
-  "actorSpecification": 1,
-  "name": "misumi-usa-parts-scraper",
-  "title": "MISUMI USA Industrial Parts, Pricing & Lead Time Scraper",
-  "description": "Fast, lightweight B2B extractor for MISUMI USA (us.misumi-ec.com). Extracts part numbers, CAD/technical specs, tiered unit prices (USD), and shipping lead times into flat JSON/Excel. MCP & AI-Agent ready.",
-  "version": "1.0",
-  "meta": {
-    "templateId": "python-start"
-  },
-  "input": "./input_schema.json",
-  "dockerfile": "../Dockerfile",
-  "storages": {
-    "dataset": {
-      "actorSpecification": 1,
-      "fields": {
-        "type": "object",
-        "properties": {
-          "partNumber": { "type": "string", "title": "Part Number" },
-          "productName": { "type": "string", "title": "Product Name" },
-          "brand": { "type": "string", "title": "Brand" },
-          "category": { "type": "string", "title": "Category" },
-          "unitPriceUSD": { "type": "number", "title": "Unit Price (USD)" },
-          "currency": { "type": "string", "title": "Currency" },
-          "daysToShip": { "type": "integer", "title": "Lead Time (Days)" },
-          "inStock": { "type": "boolean", "title": "In Stock / Same Day" },
-          "minOrderQty": { "type": "integer", "title": "MOQ" },
-          "cadAvailable": { "type": "boolean", "title": "2D/3D CAD" },
-          "specsSummary": { "type": "string", "title": "Key Specifications" },
-          "url": { "type": "string", "title": "Product URL" },
-          "scrapedAt": { "type": "string", "title": "Scraped Timestamp (UTC)" }
+    "actorSpecification": 1,
+    "name": "misumi-usa-scraper",
+    "title": "MISUMI USA Parts Price, Lead-Time & Stock Scraper",
+    "description": "Extract public catalog unit prices, lead times (days to ship), stock status, MOQ, specs, and 2D/3D CAD availability from MISUMI USA (us.misumi-ec.com) by part number, keyword, or URL.",
+    "version": "0.1",
+    "meta": {
+        "templateId": "python-playwright"
+    },
+    "input": "./input_schema.json",
+    "dockerfile": "../Dockerfile",
+    "storages": {
+        "dataset": {
+            "actorSpecification": 1,
+            "fields": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                    "querySource": { "type": ["string", "null"], "title": "Query / Input" },
+                    "partNumber": { "type": ["string", "null"], "title": "Part Number" },
+                    "seriesCode": { "type": ["string", "null"], "title": "Series Code" },
+                    "productName": { "type": ["string", "null"], "title": "Product Name" },
+                    "brand": { "type": ["string", "null"], "title": "Brand" },
+                    "category": { "type": ["string", "null"], "title": "Category" },
+                    "unitPriceUSD": { "type": ["number", "null"], "title": "Unit Price (USD)" },
+                    "currency": { "type": ["string", "null"], "title": "Currency" },
+                    "daysToShip": { "type": ["integer", "null"], "title": "Days to Ship" },
+                    "inStock": { "type": ["boolean", "null"], "title": "Quick Ship / Stock" },
+                    "minOrderQty": { "type": ["integer", "null"], "title": "MOQ" },
+                    "cadAvailable": { "type": ["boolean", "null"], "title": "2D/3D CAD" },
+                    "specsSummary": { "type": ["string", "null"], "title": "Key Specs" },
+                    "imageUrl": { "type": ["string", "null"], "title": "Image URL" },
+                    "url": { "type": ["string", "null"], "title": "Catalog URL" },
+                    "scrapedAt": { "type": ["string", "null"], "title": "Checked At (UTC)" }
+                }
+            },
+            "views": {
+                "overview": {
+                    "title": "Procurement & Cross-Reference Sheet",
+                    "transformation": {
+                        "fields": [
+                            "partNumber",
+                            "productName",
+                            "brand",
+                            "unitPriceUSD",
+                            "daysToShip",
+                            "inStock",
+                            "minOrderQty",
+                            "cadAvailable",
+                            "specsSummary",
+                            "url"
+                        ]
+                    },
+                    "display": {
+                        "component": "table",
+                        "properties": {
+                            "partNumber": { "label": "Part Number", "format": "text" },
+                            "productName": { "label": "Product Name", "format": "text" },
+                            "brand": { "label": "Brand", "format": "text" },
+                            "unitPriceUSD": { "label": "Unit Price ($)", "format": "number" },
+                            "daysToShip": { "label": "Days to Ship", "format": "number" },
+                            "inStock": { "label": "Fast Ship", "format": "boolean" },
+                            "minOrderQty": { "label": "MOQ", "format": "number" },
+                            "cadAvailable": { "label": "CAD", "format": "boolean" },
+                            "specsSummary": { "label": "Specs Summary", "format": "text" },
+                            "url": { "label": "Product Link", "format": "link" }
+                        }
+                    }
+                }
+            }
         }
-      },
-      "views": {
-        "overview": {
-          "title": "Procurement & Cross-Reference Sheet",
-          "transformation": {
-            "fields": [
-              "partNumber",
-              "brand",
-              "productName",
-              "unitPriceUSD",
-              "daysToShip",
-              "minOrderQty",
-              "specsSummary",
-              "url"
-            ]
-          },
-          "display": {
-            "component": "table"
-          }
-        }
-      }
     }
-  }
 }
