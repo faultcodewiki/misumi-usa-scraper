@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote_plus, unquote, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 from apify import Actor
 from bs4 import BeautifulSoup
@@ -59,9 +59,17 @@ def parse_price(val: Any) -> float | None:
         return None
     try:
         num = float(m.group(1).replace(",", ""))
-        return round(num, 4) if num > 0 else None
+        return round(num, 4) if 0 < num < 1_000_000 else None
     except ValueError:
         return None
+
+
+def extract_dollar_price(text: str) -> float | None:
+    if not text:
+        return None
+    matches = re.findall(r"\$\s*([0-9,]+(?:\.[0-9]{1,4})?)", text)
+    prices = [p for m in matches if (p := parse_price(m)) is not None]
+    return prices[0] if prices else None
 
 
 def parse_days(val: Any) -> int | None:
@@ -69,7 +77,7 @@ def parse_days(val: Any) -> int | None:
         return None
     if isinstance(val, (int, float)):
         d = int(val)
-        return d if 0 <= d < 90 else None
+        return d if 0 <= d < 120 else None
     s = str(val).strip().lower()
     if not s:
         return None
@@ -78,7 +86,24 @@ def parse_days(val: Any) -> int | None:
     m = re.search(r"(\d+)", s)
     if m:
         d = int(m.group(1))
-        return d if 0 <= d < 90 else None
+        return d if 0 <= d < 120 else None
+    return None
+
+
+def extract_days_from_text(text: str) -> int | None:
+    if not text:
+        return None
+    if re.search(r"same[\s-]*day", text, re.I):
+        return 0
+    for pat in (
+        r"ships?\s*(?:as\s*early\s*as\s*|in\s*)?(\d+)\s*day",
+        r"days?\s*to\s*ship\s*[:\-]?\s*(\d+)",
+        r"(\d+)\s*days?\s*to\s*ship",
+        r"(\d+)\s*business\s*days?",
+    ):
+        m = re.search(pat, text, re.I)
+        if m:
+            return parse_days(m.group(1))
     return None
 
 
@@ -87,6 +112,13 @@ def parse_int(val: Any, default: int = 1) -> int:
         return default
     m = re.search(r"(\d+)", str(val))
     return max(1, int(m.group(1))) if m else default
+
+
+def is_part_number_query(q: str) -> bool:
+    s = q.strip()
+    if not s or " " in s or s.startswith("http") or len(s) < 3 or len(s) > 45:
+        return False
+    return bool(re.search(r"\d", s) and re.search(r"[A-Za-z]", s))
 
 
 def to_playwright_proxy(proxy_url: str | None) -> dict[str, str] | None:
@@ -105,7 +137,7 @@ def to_playwright_proxy(proxy_url: str | None) -> dict[str, str] | None:
 
 def walk_find_lists(obj: Any, target_key: str, depth: int = 0) -> list[list[Any]]:
     found: list[list[Any]] = []
-    if depth > 6:
+    if depth > 7:
         return found
     if isinstance(obj, dict):
         for k, v in obj.items():
@@ -296,96 +328,241 @@ def parse_captured_jsons(captured: list[Any], query_source: str) -> list[dict[st
     return results
 
 
-def parse_rendered_dom(html: str, current_url: str, query_source: str) -> list[dict[str, Any]]:
-    soup = BeautifulSoup(html, "lxml")
-    items: list[dict[str, Any]] = []
-    seen_codes: set[str] = set()
+def parse_detail_page(
+    soup: BeautifulSoup, current_url: str, query_source: str
+) -> dict[str, Any] | None:
+    m_code = re.search(r"/vona2/detail/(\d+)", current_url)
+    series_code = m_code.group(1) if m_code else ""
+
+    qs = parse_qs(urlparse(current_url).query)
+    part_num = clean_text(
+        (qs.get("HissuCode") or qs.get("PNSearch") or [""])[0]
+    )
+    if not part_num and is_part_number_query(query_source):
+        part_num = query_source.strip()
+
+    if not part_num:
+        for sel in (
+            '[data-part-number]',
+            '[id*="partNumber" i]',
+            '[class*="partNumber" i]',
+            '[class*="part-number" i]',
+        ):
+            el = soup.select_one(sel)
+            if el:
+                cand = clean_text(el.get("data-part-number") or el.get_text(" ", strip=True))
+                if 3 <= len(cand) <= 45 and re.search(r"\d", cand):
+                    part_num = cand
+                    break
+
+    h1 = soup.select_one("h1")
+    prod_name = clean_text(h1.get_text(" ", strip=True)) if h1 else ""
+    if not prod_name and soup.title:
+        prod_name = re.sub(r"\s*\|\s*MISUMI.*$", "", clean_text(soup.title.string), flags=re.I)
+
+    if not prod_name:
+        return None
+
+    unit_price: float | None = None
+    days: int | None = None
+    brand = ""
+    category = ""
+    image_url = ""
 
     for script in soup.select('script[type="application/ld+json"]'):
         try:
             ld = json.loads(script.string or "")
             nodes = ld if isinstance(ld, list) else [ld]
             for node in nodes:
-                if isinstance(node, dict) and node.get("@type") == "Product":
-                    name = clean_text(node.get("name"))
+                if not isinstance(node, dict):
+                    continue
+                if node.get("@type") == "BreadcrumbList":
+                    crumbs = [
+                        clean_text(it.get("item", {}).get("name") or it.get("name"))
+                        for it in (node.get("itemListElement") or [])
+                        if isinstance(it, dict)
+                    ]
+                    crumbs = [c for c in crumbs if c and c.lower() not in ("home", "misumi top", "top")]
+                    if crumbs:
+                        category = " - ".join(crumbs[:-1] or crumbs)
+                if node.get("@type") in ("Product", "IndividualProduct", "ProductModel"):
                     offers = node.get("offers") or {}
                     if isinstance(offers, list):
                         offers = offers[0] if offers else {}
-                    price = parse_price(offers.get("price") or offers.get("lowPrice"))
-                    sku = clean_text(node.get("sku") or node.get("mpn") or query_source)
-                    brand_obj = node.get("brand")
-                    brand = (
-                        clean_text(brand_obj.get("name"))
-                        if isinstance(brand_obj, dict)
-                        else clean_text(brand_obj or "MISUMI")
+                    unit_price = unit_price or parse_price(
+                        offers.get("price") or offers.get("lowPrice")
                     )
-                    if name:
-                        items.append(
-                            {
-                                "querySource": query_source,
-                                "partNumber": sku,
-                                "seriesCode": sku,
-                                "productName": name,
-                                "brand": brand or "MISUMI",
-                                "category": "",
-                                "unitPriceUSD": price,
-                                "currency": "USD",
-                                "daysToShip": None,
-                                "inStock": "instock" in str(offers.get("availability", "")).lower(),
-                                "minOrderQty": 1,
-                                "cadAvailable": "2d" in html.lower() or "3d" in html.lower(),
-                                "specsSummary": clean_text(node.get("description"))[:400],
-                                "imageUrl": normalize_url(node.get("image")),
-                                "url": normalize_url(node.get("url") or current_url),
-                                "scrapedAt": now_iso(),
-                            }
-                        )
+                    b_obj = node.get("brand")
+                    brand = brand or (
+                        clean_text(b_obj.get("name"))
+                        if isinstance(b_obj, dict)
+                        else clean_text(b_obj)
+                    )
+                    image_url = image_url or normalize_url(node.get("image"))
         except Exception:
             continue
 
+    if unit_price is None:
+        for sel in (
+            '[class*="unitPrice" i]',
+            '[class*="unit-price" i]',
+            '[id*="unitPrice" i]',
+            '[class*="priceBox" i]',
+            '[class*="price" i]',
+        ):
+            for el in soup.select(sel):
+                txt = clean_text(el.get_text(" ", strip=True))
+                p = extract_dollar_price(txt)
+                if p is not None:
+                    unit_price = p
+                    break
+            if unit_price is not None:
+                break
+
+    full_text = clean_text(soup.get_text(" ", strip=True))
+    if unit_price is None:
+        unit_price = extract_dollar_price(full_text)
+
+    for sel in ('[class*="daysToShip" i]', '[class*="ship" i]', '[id*="ship" i]'):
+        for el in soup.select(sel):
+            d = extract_days_from_text(clean_text(el.get_text(" ", strip=True)))
+            if d is not None:
+                days = d
+                break
+        if days is not None:
+            break
+
+    if days is None:
+        days = extract_days_from_text(full_text)
+
+    if not brand:
+        for sel in ('[class*="brandName" i]', '[class*="brand" i]', '[itemprop="brand"]'):
+            el = soup.select_one(sel)
+            if el:
+                b_txt = clean_text(el.get_text(" ", strip=True))
+                b_txt = re.sub(r"^brand\s*:\s*", "", b_txt, flags=re.I).strip()
+                if 1 < len(b_txt) <= 40:
+                    brand = b_txt
+                    break
+
+    spec_chunks: list[str] = []
+    for row in soup.select("table tr, dl"):
+        r_txt = clean_text(row.get_text(" ", strip=True))
+        if 4 <= len(r_txt) <= 90 and "$" not in r_txt:
+            spec_chunks.append(r_txt)
+        if len(spec_chunks) >= 6:
+            break
+
+    return {
+        "querySource": query_source,
+        "partNumber": part_num or series_code or query_source,
+        "seriesCode": series_code or part_num,
+        "productName": prod_name,
+        "brand": brand or "MISUMI",
+        "category": category,
+        "unitPriceUSD": unit_price,
+        "currency": "USD",
+        "daysToShip": days,
+        "inStock": bool(days is not None and days <= 5),
+        "minOrderQty": 1,
+        "cadAvailable": bool(re.search(r"\b(?:2D|3D|CAD)\b", full_text)),
+        "specsSummary": (" | ".join(spec_chunks) if spec_chunks else prod_name)[:450],
+        "imageUrl": image_url,
+        "url": current_url,
+        "scrapedAt": now_iso(),
+    }
+
+
+def extract_brand_from_card(card: Any, card_text: str, title: str) -> str:
+    for sel in ('[class*="brand" i]', '[class*="maker" i]'):
+        el = card.select_one(sel)
+        if el:
+            b = clean_text(el.get_text(" ", strip=True))
+            if 1 < len(b) <= 35 and b.lower() != title.lower():
+                return b
+
+    idx = card_text.find(title)
+    if idx > 0:
+        prefix = card_text[:idx].strip()
+        prefix = re.sub(
+            r"^(?:CAD|2D/3D|2D|3D|NEW|RoHS|Sale|Featured|Economy|\||\-)+\s*",
+            "",
+            prefix,
+            flags=re.I,
+        ).strip()
+        if 1 < len(prefix) <= 35:
+            return prefix
+
+    return "MISUMI"
+
+
+def parse_rendered_dom(html: str, current_url: str, query_source: str) -> list[dict[str, Any]]:
+    soup = BeautifulSoup(html, "lxml")
+    items: list[dict[str, Any]] = []
+
+    if "/vona2/detail/" in current_url:
+        detail_item = parse_detail_page(soup, current_url, query_source)
+        if detail_item:
+            return [detail_item]
+
+    grouped_links: dict[str, list[Any]] = {}
     for a_tag in soup.select('a[href*="/vona2/detail/"]'):
         href = a_tag.get("href") or ""
         m_code = re.search(r"/vona2/detail/(\d+)", href)
         if not m_code:
             continue
-        s_code = m_code.group(1)
-        if s_code in seen_codes:
+        grouped_links.setdefault(m_code.group(1), []).append(a_tag)
+
+    for s_code, a_tags in grouped_links.items():
+        best_a = max(a_tags, key=lambda a: len(clean_text(a.get_text(" ", strip=True))))
+        title = clean_text(best_a.get_text(" ", strip=True))
+        if len(title) < 3:
             continue
 
-        title = clean_text(a_tag.get_text(" ", strip=True))
-        if len(title) < 4:
-            continue
-
-        card = a_tag
-        for _ in range(4):
-            if card.parent and len(card.parent.get_text(" ", strip=True)) < 1600:
-                card = card.parent
-            else:
+        href = best_a.get("href") or ""
+        for a in a_tags:
+            h = a.get("href") or ""
+            if "HissuCode=" in h or "PNSearch=" in h:
+                href = h
                 break
 
-        card_text = clean_text(card.get_text(" ", strip=True))
-        price_match = re.search(r"\$\s*([0-9,]+(?:\.[0-9]+)?)", card_text)
-        unit_price = parse_price(price_match.group(1)) if price_match else None
+        card = best_a
+        for _ in range(8):
+            parent = card.parent
+            if not parent or parent.name in ("body", "html", "main", "ul", "ol"):
+                break
+            p_text = parent.get_text(" ", strip=True)
+            if len(p_text) > 3500:
+                break
+            codes_in_parent = {
+                m.group(1)
+                for a in parent.select('a[href*="/vona2/detail/"]')
+                if (m := re.search(r"/vona2/detail/(\d+)", a.get("href") or ""))
+            }
+            if len(codes_in_parent) > 1:
+                break
+            card = parent
 
-        days: int | None = None
-        if re.search(r"same[\s-]*day", card_text, re.I):
-            days = 0
-        else:
-            d_match = re.search(r"(\d+)\s*day", card_text, re.I)
-            if d_match:
-                days = parse_days(d_match.group(1))
+        card_text = clean_text(card.get_text(" ", strip=True))
+        unit_price = extract_dollar_price(card_text)
+        days = extract_days_from_text(card_text)
+        brand = extract_brand_from_card(card, card_text, title)
 
         pn_match = re.search(r"[?&](?:HissuCode|PNSearch)=([^&#]+)", href)
-        part_num = unquote(pn_match.group(1)) if pn_match else s_code
+        part_num = unquote(pn_match.group(1)) if pn_match else ""
+        if not part_num and is_part_number_query(query_source) and query_source.lower() in card_text.lower():
+            part_num = query_source.strip()
+        if not part_num:
+            part_num = s_code
 
-        seen_codes.add(s_code)
+        clean_summary = card_text.replace(title, "").strip(" |-")
         items.append(
             {
                 "querySource": query_source,
                 "partNumber": part_num,
                 "seriesCode": s_code,
                 "productName": title,
-                "brand": "MISUMI",
+                "brand": brand,
                 "category": "",
                 "unitPriceUSD": unit_price,
                 "currency": "USD",
@@ -393,7 +570,7 @@ def parse_rendered_dom(html: str, current_url: str, query_source: str) -> list[d
                 "inStock": bool(days is not None and days <= 5),
                 "minOrderQty": 1,
                 "cadAvailable": bool(re.search(r"\b(?:2D|3D|CAD)\b", card_text)),
-                "specsSummary": card_text[:350],
+                "specsSummary": (clean_summary or card_text)[:350],
                 "imageUrl": "",
                 "url": normalize_url(href),
                 "scrapedAt": now_iso(),
@@ -401,6 +578,26 @@ def parse_rendered_dom(html: str, current_url: str, query_source: str) -> list[d
         )
 
     return items
+
+
+async def wait_for_misumi_content(page: Page) -> None:
+    for _ in range(18):
+        title_now = await page.title()
+        url_now = page.url
+        if title_now and "access denied" not in title_now.lower():
+            if "/vona2/detail/" in url_now:
+                ready = await page.evaluate(
+                    "() => /\\$\\s*\\d/.test(document.body?.innerText || '')"
+                )
+                if ready:
+                    break
+            else:
+                ready = await page.evaluate(
+                    "() => document.querySelectorAll('a[href*=\"/vona2/detail/\"]').length > 0"
+                )
+                if ready:
+                    break
+        await page.wait_for_timeout(500)
 
 
 async def fetch_target_items(
@@ -411,10 +608,25 @@ async def fetch_target_items(
 
     async def read_json(resp: Response) -> None:
         try:
+            url_l = resp.url.lower()
+            if "misumi" not in url_l or resp.status != 200:
+                return
+            rtype = resp.request.resource_type
             ctype = (resp.headers.get("content-type") or "").lower()
-            if "json" in ctype and "misumi" in resp.url.lower() and resp.status == 200:
-                data = await resp.json()
-                captured_jsons.append(data)
+            if rtype not in ("xhr", "fetch") and "json" not in ctype:
+                if not any(k in url_l for k in ("api", "search", "price", "series", "part")):
+                    return
+            raw = await resp.text()
+            if not raw or len(raw) > 2_000_000:
+                return
+            txt = raw.strip()
+            if txt.startswith("{") or txt.startswith("["):
+                captured_jsons.append(json.loads(txt))
+            elif "(" in txt[:60] and txt.endswith((")", ");")):
+                inner = re.sub(r"^[^(]+\(", "", txt)
+                inner = re.sub(r"\);?\s*$", "", inner)
+                if inner.startswith("{") or inner.startswith("["):
+                    captured_jsons.append(json.loads(inner))
         except Exception:
             pass
 
@@ -423,29 +635,82 @@ async def fetch_target_items(
 
     page.on("response", on_response)
     try:
-        resp = await page.goto(target_url, wait_until="domcontentloaded", timeout=25000)
+        resp = await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
         status = resp.status if resp else 0
+        await wait_for_misumi_content(page)
+
         title = await page.title()
-        Actor.log.info(f"Loaded '{query_label}' -> HTTP {status} | Title: {title[:70]}")
+        if not title and status != 403:
+            Actor.log.info(f"Warm-reloading '{query_label}' after initial blank shell...")
+            resp = await page.goto(target_url, wait_until="load", timeout=30000)
+            status = resp.status if resp else status
+            await wait_for_misumi_content(page)
+            title = await page.title()
+
+        Actor.log.info(
+            f"Loaded '{query_label}' -> HTTP {status} | URL: {page.url[:75]} | Title: {title[:60]}"
+        )
 
         if status == 403 or "access denied" in title.lower():
             return True, []
 
         try:
-            await page.wait_for_selector('a[href*="/vona2/detail/"]', timeout=8000)
+            await page.evaluate("() => window.scrollBy(0, 650)")
+            await page.wait_for_timeout(1200)
+            await page.evaluate("() => window.scrollTo(0, 0)")
         except Exception:
             pass
 
-        await page.wait_for_timeout(2500)
+        await page.wait_for_timeout(1800)
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
 
-        items = parse_captured_jsons(captured_jsons, query_label)
-        if not items:
-            html = await page.content()
-            if "access denied" in html[:1500].lower():
-                return True, []
-            items = parse_rendered_dom(html, page.url, query_label)
+        html = await page.content()
+        if "access denied" in html[:1500].lower():
+            return True, []
+
+        dom_items = parse_rendered_dom(html, page.url, query_label)
+        api_items = parse_captured_jsons(captured_jsons, query_label)
+
+        api_by_key: dict[str, dict[str, Any]] = {}
+        for a_it in api_items:
+            if a_it.get("seriesCode"):
+                api_by_key[a_it["seriesCode"]] = a_it
+            if a_it.get("partNumber"):
+                api_by_key[a_it["partNumber"]] = a_it
+
+        items = dom_items if dom_items else api_items
+        for it in items:
+            match_api = api_by_key.get(it.get("partNumber") or "") or api_by_key.get(
+                it.get("seriesCode") or ""
+            )
+            if match_api:
+                if it.get("unitPriceUSD") is None and match_api.get("unitPriceUSD") is not None:
+                    it["unitPriceUSD"] = match_api["unitPriceUSD"]
+                if it.get("daysToShip") is None and match_api.get("daysToShip") is not None:
+                    it["daysToShip"] = match_api["daysToShip"]
+                if (not it.get("brand") or it["brand"] == "MISUMI") and match_api.get("brand"):
+                    it["brand"] = match_api["brand"]
+                if not it.get("category") and match_api.get("category"):
+                    it["category"] = match_api["category"]
+
+        if items and is_part_number_query(query_label) and items[0].get("unitPriceUSD") is None:
+            first_url = items[0].get("url") or ""
+            if "/vona2/detail/" in first_url:
+                sep = "&" if "?" in first_url else "?"
+                detail_target = (
+                    first_url
+                    if "HissuCode=" in first_url
+                    else f"{first_url}{sep}HissuCode={quote_plus(query_label)}"
+                )
+                Actor.log.info(f"Fetching exact part unit price on detail page: {detail_target[:80]}")
+                await page.goto(detail_target, wait_until="domcontentloaded", timeout=25000)
+                await wait_for_misumi_content(page)
+                await page.wait_for_timeout(2000)
+                d_soup = BeautifulSoup(await page.content(), "lxml")
+                d_item = parse_detail_page(d_soup, page.url, query_label)
+                if d_item and d_item.get("unitPriceUSD") is not None:
+                    items[0] = d_item
 
         return False, items
     finally:
