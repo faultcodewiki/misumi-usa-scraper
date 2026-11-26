@@ -1,0 +1,55 @@
+{
+  "actorSpecification": 1,
+  "name": "misumi-usa-parts-scraper",
+  "title": "MISUMI USA Industrial Parts, Pricing & Lead Time Scraper",
+  "description": "Fast, lightweight B2B extractor for MISUMI USA (us.misumi-ec.com). Extracts part numbers, CAD/technical specs, tiered unit prices (USD), and shipping lead times into flat JSON/Excel. MCP & AI-Agent ready.",
+  "version": "1.0",
+  "meta": {
+    "templateId": "python-start"
+  },
+  "input": "./input_schema.json",
+  "dockerfile": "../Dockerfile",
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1,
+      "fields": {
+        "type": "object",
+        "properties": {
+          "partNumber": { "type": "string", "title": "Part Number" },
+          "productName": { "type": "string", "title": "Product Name" },
+          "brand": { "type": "string", "title": "Brand" },
+          "category": { "type": "string", "title": "Category" },
+          "unitPriceUSD": { "type": "number", "title": "Unit Price (USD)" },
+          "currency": { "type": "string", "title": "Currency" },
+          "daysToShip": { "type": "integer", "title": "Lead Time (Days)" },
+          "inStock": { "type": "boolean", "title": "In Stock / Same Day" },
+          "minOrderQty": { "type": "integer", "title": "MOQ" },
+          "cadAvailable": { "type": "boolean", "title": "2D/3D CAD" },
+          "specsSummary": { "type": "string", "title": "Key Specifications" },
+          "url": { "type": "string", "title": "Product URL" },
+          "scrapedAt": { "type": "string", "title": "Scraped Timestamp (UTC)" }
+        }
+      },
+      "views": {
+        "overview": {
+          "title": "Procurement & Cross-Reference Sheet",
+          "transformation": {
+            "fields": [
+              "partNumber",
+              "brand",
+              "productName",
+              "unitPriceUSD",
+              "daysToShip",
+              "minOrderQty",
+              "specsSummary",
+              "url"
+            ]
+          },
+          "display": {
+            "component": "table"
+          }
+        }
+      }
+    }
+  }
+}
