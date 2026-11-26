@@ -1,0 +1,12 @@
+{
+  "actorOutputSchemaVersion": 1,
+  "title": "MISUMI USA Parts Scraper Output",
+  "properties": {
+    "results": {
+      "type": "string",
+      "title": "Procurement & Cross-Reference Sheet",
+      "description": "Extracted MISUMI USA part pricing, lead time, MOQ, brand, CAD status, and specifications",
+      "template": "{{links.apiDefaultDatasetUrl}}/items"
+    }
+  }
+}
