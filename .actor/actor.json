@@ -8,6 +8,7 @@
         "templateId": "python-playwright"
     },
     "input": "./input_schema.json",
+    "output": "./output_schema.json",
     "dockerfile": "../Dockerfile",
     "storages": {
         "dataset": {
@@ -28,15 +29,14 @@
                     "inStock": { "type": ["boolean", "null"], "title": "Quick Ship / Stock" },
                     "minOrderQty": { "type": ["integer", "null"], "title": "MOQ" },
                     "cadAvailable": { "type": ["boolean", "null"], "title": "2D/3D CAD" },
-                    "specsSummary": { "type": ["string", "null"], "title": "Key Specs" },
-                    "imageUrl": { "type": ["string", "null"], "title": "Image URL" },
-                    "url": { "type": ["string", "null"], "title": "Catalog URL" },
-                    "scrapedAt": { "type": ["string", "null"], "title": "Checked At (UTC)" }
+                    "specsSummary": { "type": ["string", "null"], "title": "Specs Summary" },
+                    "url": { "type": ["string", "null"], "title": "Product Link" }
                 }
             },
             "views": {
                 "overview": {
                     "title": "Procurement & Cross-Reference Sheet",
+                    "description": "Part number, USD unit price, days to ship, stock flag, MOQ, CAD availability, specs, and product URL",
                     "transformation": {
                         "fields": [
                             "partNumber",
