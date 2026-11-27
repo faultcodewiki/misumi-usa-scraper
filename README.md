@@ -38,3 +38,46 @@ No coding required! Export live MISUMI part prices and lead times directly to Ex
     "useApifyProxy": true
   }
 }
+```
+
+### Flat Output Schema Sample (JSON)
+```json
+{
+  "querySource": "SFJ10-100",
+  "partNumber": "SFJ10-100",
+  "seriesCode": "110302634310",
+  "productName": "Linear Shafts - Straight, Precision",
+  "brand": "MISUMI",
+  "category": "Linear Motion",
+  "unitPriceUSD": 14.5,
+  "currency": "USD",
+  "daysToShip": 0,
+  "inStock": true,
+  "minOrderQty": 1,
+  "cadAvailable": true,
+  "specsSummary": "Shaft Dia. D(mm): 10 | Overall Length L(mm): 100 | Material: Equivalent to SUJ2",
+  "imageUrl": "[https://us.misumi-ec.com/](https://us.misumi-ec.com/)...",
+  "url": "[https://us.misumi-ec.com/vona2/detail/110302634310/](https://us.misumi-ec.com/vona2/detail/110302634310/)",
+  "scrapedAt": "2026-11-26T01:00:00Z"
+}
+```
+
+---
+
+## Key Use Cases
+1. **Automated BOM Quoting:** Batch-check unit prices (USD) and lead times across dozens or hundreds of MISUMI part numbers in seconds.
+2. **Part Cross-Referencing:** Compare specifications, materials, and same-day shipping availability across brands distributed on MISUMI USA.
+3. **ERP & Procurement Sync:** Feed clean, flat product data directly into Google Sheets, Excel, Make/Zapier, ERP systems, or AI procurement agents.
+
+---
+
+## Frequently Asked Questions (FAQ)
+
+### Does MISUMI USA have a public pricing API?
+MISUMI does not offer an open, self-serve public API for instant anonymous lookups without enterprise EDI onboarding. This scraper acts as a **ready-to-use MISUMI USA API alternative**, returning structured JSON or Excel data on demand.
+
+### Can I batch-check an entire Bill of Materials (BOM)?
+Yes! Simply paste your list of part numbers into the `partNumbers` input array (via the web UI or API) and export the entire BOM pricing and lead-time table to Excel or CSV in seconds.
+
+### Do I need proxies or a MISUMI login account?
+No MISUMI login is required for standard catalog pricing, specs, and lead-time checks. Standard Apify Proxy configuration is pre-enabled by default for reliable extraction.
